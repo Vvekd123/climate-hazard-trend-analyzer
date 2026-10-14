@@ -1,11 +1,12 @@
-
 from datetime import date
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, HTTPException, Query
 
 from app.services.analysis import analyze_heatwaves
-from app.services.weather import fetch_daily_max_temperatures
-
+from app.services.weather import (
+    WeatherRateLimitError,
+    fetch_daily_max_temperatures,
+)
 app = FastAPI(
     title="Climate Hazard Trend Analyzer",
     description="Analyze historical climate hazards.",
@@ -46,6 +47,8 @@ def weather_preview(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except WeatherRateLimitError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -89,5 +92,7 @@ def analyze_heatwave_endpoint(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except WeatherRateLimitError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

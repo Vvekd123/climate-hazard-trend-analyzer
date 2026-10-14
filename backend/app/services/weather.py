@@ -1,6 +1,4 @@
-
-from datetime import date
-
+from datetime import date, timedelta
 import httpx
 from app.services.weather_cache import (
     get_cached_observations,
@@ -10,6 +8,10 @@ from app.services.weather_cache import (
 OPEN_METEO_ARCHIVE_URL = (
     "https://archive-api.open-meteo.com/v1/archive"
 )
+
+
+class WeatherRateLimitError(RuntimeError):
+    """Raised when Open-Meteo temporarily rate-limits a request."""
 
 
 def _fetch_from_open_meteo(
@@ -54,6 +56,12 @@ def _fetch_from_open_meteo(
         raise RuntimeError("Weather API request timed out") from exc
 
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            raise WeatherRateLimitError(
+                "Weather provider rate limit reached. "
+                "Cached data has been preserved; please try again later."
+            ) from exc
+
         raise RuntimeError(
             f"Weather API returned HTTP {exc.response.status_code}"
         ) from exc
@@ -98,14 +106,14 @@ def _fetch_from_open_meteo(
 
     return observations
 
+
 def fetch_daily_max_temperatures(
     latitude: float,
     longitude: float,
     start_date: date,
     end_date: date,
 ) -> list[dict]:
-    """Return cached observations or fetch and cache them."""
-    # Preserve the existing input validation before checking the cache.
+    """Return cached observations and fetch only missing dates."""
     if not -90 <= latitude <= 90:
         raise ValueError("Latitude must be between -90 and 90")
 
@@ -122,12 +130,71 @@ def fetch_daily_max_temperatures(
         latitude, longitude, start_date, end_date
     )
 
-    if cached is not None:
-        return cached
+    # MongoDB unavailable: preserve the existing direct-fetch fallback.
+    if cached is None:
+        observations = _fetch_from_open_meteo(
+            latitude, longitude, start_date, end_date
+        )
+        save_observations(latitude, longitude, observations)
+        return observations
 
-    observations = _fetch_from_open_meteo(
-        latitude, longitude, start_date, end_date
-    )
+    # Index cached records by date for efficient lookup.
+    observations_by_date = {
+        item["date"]: item for item in cached
+    }
 
-    save_observations(latitude, longitude, observations)
-    return observations
+    missing_dates = []
+    current_date = start_date
+
+    while current_date <= end_date:
+        if current_date.isoformat() not in observations_by_date:
+            missing_dates.append(current_date)
+        current_date += timedelta(days=1)
+
+
+    # Fetch each consecutive run of missing dates in chunks of at
+    # most one year. Save every successful chunk immediately.
+    index = 0
+    max_chunk_days = 365
+
+    while index < len(missing_dates):
+        missing_start = missing_dates[index]
+
+        run_end = missing_start
+        index += 1
+
+        while (
+            index < len(missing_dates)
+            and missing_dates[index] == run_end + timedelta(days=1)
+        ):
+            run_end = missing_dates[index]
+            index += 1
+
+        chunk_start = missing_start
+
+        while chunk_start <= run_end:
+            chunk_end = min(
+                chunk_start + timedelta(days=max_chunk_days - 1),
+                run_end,
+            )
+
+            fetched = _fetch_from_open_meteo(
+                latitude, longitude, chunk_start, chunk_end
+            )
+
+            save_observations(latitude, longitude, fetched)
+
+            for item in fetched:
+                observations_by_date[item["date"]] = item
+
+            chunk_start = chunk_end + timedelta(days=1)
+
+
+    return [
+        observations_by_date[day.isoformat()]
+        for day in (
+            start_date + timedelta(days=offset)
+            for offset in range((end_date - start_date).days + 1)
+        )
+        if day.isoformat() in observations_by_date
+    ]
