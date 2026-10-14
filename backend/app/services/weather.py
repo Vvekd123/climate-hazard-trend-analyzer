@@ -2,14 +2,17 @@
 from datetime import date
 
 import httpx
-
+from app.services.weather_cache import (
+    get_cached_observations,
+    save_observations,
+)
 
 OPEN_METEO_ARCHIVE_URL = (
     "https://archive-api.open-meteo.com/v1/archive"
 )
 
 
-def fetch_daily_max_temperatures(
+def _fetch_from_open_meteo(
     latitude: float,
     longitude: float,
     start_date: date,
@@ -93,4 +96,38 @@ def fetch_daily_max_temperatures(
             ),
         })
 
+    return observations
+
+def fetch_daily_max_temperatures(
+    latitude: float,
+    longitude: float,
+    start_date: date,
+    end_date: date,
+) -> list[dict]:
+    """Return cached observations or fetch and cache them."""
+    # Preserve the existing input validation before checking the cache.
+    if not -90 <= latitude <= 90:
+        raise ValueError("Latitude must be between -90 and 90")
+
+    if not -180 <= longitude <= 180:
+        raise ValueError("Longitude must be between -180 and 180")
+
+    if start_date > end_date:
+        raise ValueError("Start date must not be after end date")
+
+    if (end_date - start_date).days > 40 * 366:
+        raise ValueError("Date range cannot exceed 40 years")
+
+    cached = get_cached_observations(
+        latitude, longitude, start_date, end_date
+    )
+
+    if cached is not None:
+        return cached
+
+    observations = _fetch_from_open_meteo(
+        latitude, longitude, start_date, end_date
+    )
+
+    save_observations(latitude, longitude, observations)
     return observations

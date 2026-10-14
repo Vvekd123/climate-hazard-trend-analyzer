@@ -182,3 +182,57 @@ def test_rejects_negative_window_days():
             end_date=date(2020, 5, 7),
             window_days=-1,
         )
+
+from app.services.analysis import calculate_annual_trend
+
+
+def test_increasing_annual_frequency():
+    result = calculate_annual_trend({
+        "2020": 1,
+        "2021": 2,
+        "2022": 3,
+        "2023": 4,
+        "2024": 5,
+    })
+
+    assert result["available"] is True
+    assert result["direction"] == "increasing"
+    assert result["slope_events_per_year"] == 1.0
+    assert result["slope_events_per_decade"] == 10.0
+
+
+def test_decreasing_annual_frequency():
+    result = calculate_annual_trend({
+        "2020": 5,
+        "2021": 4,
+        "2022": 3,
+        "2023": 2,
+        "2024": 1,
+    })
+
+    assert result["direction"] == "decreasing"
+    assert result["slope_events_per_year"] == -1.0
+
+
+def test_stable_annual_frequency():
+    result = calculate_annual_trend({
+        "2020": 2,
+        "2021": 2,
+        "2022": 2,
+        "2023": 2,
+        "2024": 2,
+    })
+
+    assert result["direction"] == "stable"
+    assert result["slope_events_per_year"] == 0.0
+
+
+def test_short_period_has_no_trend():
+    result = calculate_annual_trend({
+        "2020": 1,
+        "2021": 2,
+        "2022": 3,
+    })
+
+    assert result["available"] is False
+    assert result["direction"] == "insufficient_data"
