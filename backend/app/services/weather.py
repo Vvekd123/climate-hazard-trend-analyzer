@@ -1,26 +1,29 @@
+
 from datetime import date, timedelta
+
 import httpx
+
 from app.services.weather_cache import (
     get_cached_observations,
     save_observations,
 )
 
-OPEN_METEO_ARCHIVE_URL = (
-    "https://archive-api.open-meteo.com/v1/archive"
+NASA_POWER_DAILY_URL = (
+    "https://power.larc.nasa.gov/api/temporal/daily/point"
 )
 
 
 class WeatherRateLimitError(RuntimeError):
-    """Raised when Open-Meteo temporarily rate-limits a request."""
+    """Raised when the weather provider rate-limits a request."""
 
 
-def _fetch_from_open_meteo(
+def _fetch_from_nasa_power(
     latitude: float,
     longitude: float,
     start_date: date,
     end_date: date,
 ) -> list[dict]:
-    """Fetch daily maximum temperatures from Open-Meteo."""
+    """Fetch daily maximum temperatures from NASA POWER in Celsius."""
 
     if not -90 <= latitude <= 90:
         raise ValueError("Latitude must be between -90 and 90")
@@ -35,74 +38,82 @@ def _fetch_from_open_meteo(
         raise ValueError("Date range cannot exceed 40 years")
 
     params = {
-        "latitude": latitude,
+        "parameters": "T2M_MAX",
+        "community": "RE",
         "longitude": longitude,
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "daily": "temperature_2m_max",
-        "timezone": "UTC",
+        "latitude": latitude,
+        "start": start_date.strftime("%Y%m%d"),
+        "end": end_date.strftime("%Y%m%d"),
+        "format": "JSON",
+        "time-standard": "UTC",
     }
 
     try:
         response = httpx.get(
-            OPEN_METEO_ARCHIVE_URL,
+            NASA_POWER_DAILY_URL,
             params=params,
-            timeout=60.0,
+            timeout=90.0,
         )
+
+        if response.status_code == 429:
+            raise WeatherRateLimitError(
+                "NASA POWER rate limit reached. "
+                "Saved cache data is preserved; retry later."
+            )
+
         response.raise_for_status()
         payload = response.json()
 
+    except WeatherRateLimitError:
+        raise
     except httpx.TimeoutException as exc:
         raise RuntimeError("Weather API request timed out") from exc
-
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 429:
-            raise WeatherRateLimitError(
-                "Weather provider rate limit reached. "
-                "Cached data has been preserved; please try again later."
-            ) from exc
-
         raise RuntimeError(
             f"Weather API returned HTTP {exc.response.status_code}"
         ) from exc
-
     except httpx.RequestError as exc:
         raise RuntimeError("Could not connect to weather API") from exc
+    except ValueError as exc:
+        raise RuntimeError("Weather API returned invalid JSON") from exc
 
-    daily = payload.get("daily")
+    try:
+        values = payload["properties"]["parameter"]["T2M_MAX"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError(
+            "NASA POWER response is missing T2M_MAX data"
+        ) from exc
 
-    if not isinstance(daily, dict):
-        raise RuntimeError("Weather API returned an invalid response")
-
-    dates = daily.get("time")
-    temperatures = daily.get("temperature_2m_max")
-
-    if (
-        not isinstance(dates, list)
-        or not isinstance(temperatures, list)
-        or len(dates) != len(temperatures)
-    ):
-        raise RuntimeError("Weather API returned incomplete daily data")
+    if not isinstance(values, dict):
+        raise RuntimeError("NASA POWER returned invalid daily data")
 
     observations = []
+    current = start_date
 
-    for day, temperature in zip(dates, temperatures):
-        # Validate dates and preserve missing temperatures as None.
-        date.fromisoformat(day)
+    while current <= end_date:
+        day = current.isoformat()
+        raw_value = values.get(current.strftime("%Y%m%d"))
 
-        if temperature is not None and not isinstance(
-            temperature, (int, float)
-        ):
-            raise RuntimeError("Invalid temperature value received")
+        # NASA POWER uses -999 for unavailable parameter values.
+        temperature = None
+
+        if raw_value is not None:
+            try:
+                numeric_value = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"Invalid temperature value for {day}"
+                ) from exc
+
+            if numeric_value != -999:
+                temperature = numeric_value
 
         observations.append({
             "date": day,
-            "temperature_max": (
-                float(temperature)
-                if temperature is not None
-                else None
-            ),
+            "temperature_max": temperature,
         })
+
+        current += timedelta(days=1)
 
     return observations
 
@@ -113,7 +124,8 @@ def fetch_daily_max_temperatures(
     start_date: date,
     end_date: date,
 ) -> list[dict]:
-    """Return cached observations and fetch only missing dates."""
+    """Return cached observations and fetch missing dates from NASA POWER."""
+
     if not -90 <= latitude <= 90:
         raise ValueError("Latitude must be between -90 and 90")
 
@@ -130,36 +142,29 @@ def fetch_daily_max_temperatures(
         latitude, longitude, start_date, end_date
     )
 
-    # MongoDB unavailable: preserve the existing direct-fetch fallback.
     if cached is None:
-        observations = _fetch_from_open_meteo(
-            latitude, longitude, start_date, end_date
+        raise RuntimeError(
+            "MongoDB cache is unavailable. "
+            "Restore the database connection before fetching data."
         )
-        save_observations(latitude, longitude, observations)
-        return observations
 
-    # Index cached records by date for efficient lookup.
     observations_by_date = {
         item["date"]: item for item in cached
     }
 
     missing_dates = []
-    current_date = start_date
+    current = start_date
 
-    while current_date <= end_date:
-        if current_date.isoformat() not in observations_by_date:
-            missing_dates.append(current_date)
-        current_date += timedelta(days=1)
+    while current <= end_date:
+        if current.isoformat() not in observations_by_date:
+            missing_dates.append(current)
+        current += timedelta(days=1)
 
-
-    # Fetch each consecutive run of missing dates in chunks of at
-    # most one year. Save every successful chunk immediately.
     index = 0
     max_chunk_days = 365
 
     while index < len(missing_dates):
         missing_start = missing_dates[index]
-
         run_end = missing_start
         index += 1
 
@@ -178,23 +183,42 @@ def fetch_daily_max_temperatures(
                 run_end,
             )
 
-            fetched = _fetch_from_open_meteo(
+            fetched = _fetch_from_nasa_power(
                 latitude, longitude, chunk_start, chunk_end
             )
 
-            save_observations(latitude, longitude, fetched)
+            # Verify the MongoDB write before marking the batch complete.
+            saved_successfully = save_observations(
+                latitude, longitude, fetched
+            )
 
-            for item in fetched:
+            if not saved_successfully:
+                raise RuntimeError(
+                    "Could not save weather data to MongoDB. "
+                    "Check database connectivity and logs."
+                )
+
+            saved = get_cached_observations(
+                latitude, longitude, chunk_start, chunk_end
+            )
+
+            if saved is None or len(saved) != len(fetched):
+                raise RuntimeError(
+                    "Could not verify the weather cache write. "
+                    "Check MongoDB connectivity and logs."
+                )
+
+            for item in saved:
                 observations_by_date[item["date"]] = item
 
             chunk_start = chunk_end + timedelta(days=1)
 
-
     return [
-        observations_by_date[day.isoformat()]
-        for day in (
+        observations_by_date[
+            (start_date + timedelta(days=offset)).isoformat()
+        ]
+        for offset in range((end_date - start_date).days + 1)
+        if (
             start_date + timedelta(days=offset)
-            for offset in range((end_date - start_date).days + 1)
-        )
-        if day.isoformat() in observations_by_date
+        ).isoformat() in observations_by_date
     ]
