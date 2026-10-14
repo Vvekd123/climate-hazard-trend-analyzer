@@ -6,7 +6,45 @@ from app.services.weather import WeatherRateLimitError
 from app.services import weather
 
 
-def test_cache_hit_skips_open_meteo(monkeypatch):
+def setup_fake_cache(monkeypatch, initial_records=None):
+    """Simulate MongoDB reads and writes using an in-memory list."""
+    records = list(initial_records or [])
+
+    def fake_get(latitude, longitude, start_date, end_date):
+        return [
+            item.copy()
+            for item in records
+            if start_date.isoformat() <= item["date"] <= end_date.isoformat()
+        ]
+
+    def fake_save(latitude, longitude, observations):
+        for item in observations:
+            existing = next(
+                (
+                    record for record in records
+                    if record["date"] == item["date"]
+                ),
+                None,
+            )
+
+            if existing:
+                existing.update(item)
+            else:
+                records.append(item.copy())
+
+        return True
+
+    monkeypatch.setattr(
+        weather, "get_cached_observations", fake_get
+    )
+    monkeypatch.setattr(
+        weather, "save_observations", fake_save
+    )
+
+    return records
+
+
+def test_cache_hit_skips_nasa_power(monkeypatch):
     cached = [
         {"date": "2020-05-01", "temperature_max": 35.0},
         {"date": "2020-05-02", "temperature_max": 36.0},
@@ -17,9 +55,9 @@ def test_cache_hit_skips_open_meteo(monkeypatch):
     )
 
     def unexpected_fetch(*args):
-        raise AssertionError("Open-Meteo should not be called on a cache hit")
+        raise AssertionError("NASA POWER should not be called on a cache hit")
 
-    monkeypatch.setattr(weather, "_fetch_from_open_meteo", unexpected_fetch)
+    monkeypatch.setattr(weather, "_fetch_from_nasa_power", unexpected_fetch)
 
     result = weather.fetch_daily_max_temperatures(
         12.9716, 77.5946, date(2020, 5, 1), date(2020, 5, 2)
@@ -35,25 +73,19 @@ def test_cache_miss_fetches_and_saves(monkeypatch):
     ]
     saved = []
 
+    saved = setup_fake_cache(monkeypatch)
     monkeypatch.setattr(
-        weather, "get_cached_observations", lambda *args: None
+        weather, "_fetch_from_nasa_power", lambda *args: fetched
     )
-    monkeypatch.setattr(
-        weather, "_fetch_from_open_meteo", lambda *args: fetched
-    )
-    monkeypatch.setattr(
-        weather, "save_observations",
-        lambda latitude, longitude, observations:
-            saved.append((latitude, longitude, observations)),
-    )
+    
 
     result = weather.fetch_daily_max_temperatures(
         12.9716, 77.5946, date(2020, 5, 1), date(2020, 5, 2)
     )
 
     assert result == fetched
-    assert len(saved) == 1
-    assert saved[0][2] == fetched
+    assert len(saved) == 2
+    assert saved == fetched
 
 
 def test_empty_cache_result_triggers_fetch(monkeypatch):
@@ -61,16 +93,10 @@ def test_empty_cache_result_triggers_fetch(monkeypatch):
         {"date": "2020-05-01", "temperature_max": 35.0},
     ]
     saved = []
+    saved = setup_fake_cache(monkeypatch)
 
     monkeypatch.setattr(
-        weather, "get_cached_observations", lambda *args: None
-    )
-    monkeypatch.setattr(
-        weather, "_fetch_from_open_meteo", lambda *args: fetched
-    )
-    monkeypatch.setattr(
-        weather, "save_observations",
-        lambda *args: saved.append(args),
+        weather, "_fetch_from_nasa_power", lambda *args: fetched
     )
 
     result = weather.fetch_daily_max_temperatures(
@@ -78,7 +104,7 @@ def test_empty_cache_result_triggers_fetch(monkeypatch):
     )
 
     assert result == fetched
-    assert len(saved) == 1
+    assert saved == fetched
 
 def test_partial_cache_fetches_only_missing_dates(monkeypatch):
     from datetime import date, timedelta
@@ -91,7 +117,7 @@ def test_partial_cache_fetches_only_missing_dates(monkeypatch):
 
     fetched_ranges = []
     saved = []
-
+    saved = setup_fake_cache(monkeypatch, cached)   
     def fake_fetch(latitude, longitude, start_date, end_date):
         fetched_ranges.append((start_date, end_date))
         records = []
@@ -107,14 +133,7 @@ def test_partial_cache_fetches_only_missing_dates(monkeypatch):
         return records
 
     monkeypatch.setattr(
-        weather, "get_cached_observations", lambda *args: cached
-    )
-    monkeypatch.setattr(
-        weather, "_fetch_from_open_meteo", fake_fetch
-    )
-    monkeypatch.setattr(
-        weather, "save_observations",
-        lambda latitude, longitude, observations: saved.extend(observations),
+        weather, "_fetch_from_nasa_power", fake_fetch
     )
 
     result = weather.fetch_daily_max_temperatures(
@@ -127,13 +146,14 @@ def test_partial_cache_fetches_only_missing_dates(monkeypatch):
     ]
     assert result[:3] == cached
     assert fetched_ranges == [(date(2020, 5, 4), date(2020, 5, 7))]
-    assert len(saved) == 4
+    assert len(saved) == 7
+    assert len([item for item in saved if item["date"] >= "2020-05-04"]) == 4
 
-def test_open_meteo_429_raises_rate_limit_error(monkeypatch):
+def test_nasa_power_429_raises_rate_limit_error(monkeypatch):
     response = httpx.Response(
         429,
         request=httpx.Request(
-            "GET", weather.OPEN_METEO_ARCHIVE_URL
+            "GET", weather.NASA_POWER_DAILY_URL
         ),
     )
 
@@ -145,7 +165,7 @@ def test_open_meteo_429_raises_rate_limit_error(monkeypatch):
         WeatherRateLimitError,
         match="rate limit reached",
     ):
-        weather._fetch_from_open_meteo(
+        weather._fetch_from_nasa_power(
             12.9716,
             77.5946,
             date(2020, 5, 1),
@@ -159,7 +179,7 @@ def test_large_missing_range_is_fetched_in_chunks(monkeypatch):
     end = start + timedelta(days=365)
 
     fetched_ranges = []
-
+    saved = setup_fake_cache(monkeypatch)
     def fake_fetch(latitude, longitude, chunk_start, chunk_end):
         fetched_ranges.append((chunk_start, chunk_end))
         records = []
@@ -174,14 +194,9 @@ def test_large_missing_range_is_fetched_in_chunks(monkeypatch):
 
         return records
 
+    
     monkeypatch.setattr(
-        weather, "get_cached_observations", lambda *args: []
-    )
-    monkeypatch.setattr(
-        weather, "_fetch_from_open_meteo", fake_fetch
-    )
-    monkeypatch.setattr(
-        weather, "save_observations", lambda *args: None
+        weather, "_fetch_from_nasa_power", fake_fetch
     )
 
     result = weather.fetch_daily_max_temperatures(

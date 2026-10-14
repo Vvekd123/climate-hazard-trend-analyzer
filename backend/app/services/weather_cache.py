@@ -1,3 +1,4 @@
+
 import logging
 import os
 from datetime import date
@@ -34,7 +35,6 @@ def _get_collection():
                 "daily_weather"
             ]
 
-        # Force connection now, rather than waiting for the first query.
         _client.admin.command("ping")
 
         if not _index_ready:
@@ -53,7 +53,7 @@ def _get_collection():
 
     except PyMongoError:
         logger.warning(
-            "MongoDB cache unavailable; using Open-Meteo directly.",
+            "MongoDB cache unavailable; weather data cannot be cached.",
             exc_info=True,
         )
         return None
@@ -65,12 +65,7 @@ def get_cached_observations(
     start_date: date,
     end_date: date,
 ):
-    """
-    Return available cached weather records for the requested period.
-
-    None means MongoDB is unavailable.
-    An empty list means MongoDB is available but no records were found.
-    """
+    """Return cached records; None means the database is unavailable."""
     collection = _get_collection()
 
     if collection is None:
@@ -80,7 +75,7 @@ def get_cached_observations(
     lon = round(longitude, 4)
 
     try:
-        records = list(
+        return list(
             collection.find(
                 {
                     "latitude": lat,
@@ -97,9 +92,6 @@ def get_cached_observations(
                 },
             ).sort("date", 1)
         )
-
-        return records
-
     except PyMongoError:
         logger.warning(
             "MongoDB cache read failed.",
@@ -112,11 +104,15 @@ def save_observations(
     latitude: float,
     longitude: float,
     observations: list[dict],
-) -> None:
-    """Upsert weather observations without creating duplicates."""
+) -> bool:
+    """Upsert observations and report whether the write succeeded."""
     collection = _get_collection()
-    if collection is None or not observations:
-        return
+
+    if collection is None:
+        return False
+
+    if not observations:
+        return True
 
     lat = round(latitude, 4)
     lon = round(longitude, 4)
@@ -143,5 +139,10 @@ def save_observations(
 
     try:
         collection.bulk_write(operations, ordered=False)
+        return True
     except PyMongoError:
-        logger.warning("MongoDB cache write failed.", exc_info=True)
+        logger.warning(
+            "MongoDB cache write failed.",
+            exc_info=True,
+        )
+        return False
