@@ -62,6 +62,81 @@ def _find_missing_dates(
     return missing_dates
 
 
+def calculate_annual_trend(annual_frequency: dict[str, int]) -> dict:
+    """
+    Calculate a descriptive linear trend in annual heatwave frequency.
+
+    The slope represents the change in heatwave events per year.
+    This is a descriptive regression, not a statistical significance test.
+    """
+    years = sorted(int(year) for year in annual_frequency)
+
+    if len(years) < 5:
+        return {
+            "method": "ordinary_least_squares",
+            "available": False,
+            "reason": "At least 5 calendar years are required.",
+            "years_analyzed": len(years),
+            "slope_events_per_year": None,
+            "slope_events_per_decade": None,
+            "direction": "insufficient_data",
+            "insight": (
+                "Trend analysis requires at least 5 calendar years "
+                "of data."
+            ),
+        }
+
+    # Center the years to keep the calculation numerically stable.
+    mean_year = sum(years) / len(years)
+    frequencies = [annual_frequency[str(year)] for year in years]
+    mean_frequency = sum(frequencies) / len(frequencies)
+
+    numerator = sum(
+        (year - mean_year) * (frequency - mean_frequency)
+        for year, frequency in zip(years, frequencies)
+    )
+    denominator = sum(
+        (year - mean_year) ** 2 for year in years
+    )
+
+    slope = numerator / denominator
+    slope_per_decade = slope * 10
+
+    if slope > 1e-9:
+        direction = "increasing"
+        insight = (
+            f"Annual heatwave frequency shows a descriptive "
+            f"increasing trend of approximately "
+            f"{slope_per_decade:.2f} events per decade."
+        )
+    elif slope < -1e-9:
+        direction = "decreasing"
+        insight = (
+            f"Annual heatwave frequency shows a descriptive "
+            f"decreasing trend of approximately "
+            f"{abs(slope_per_decade):.2f} events per decade."
+        )
+    else:
+        direction = "stable"
+        insight = (
+            "Annual heatwave frequency shows approximately "
+            "no linear trend over the selected period."
+        )
+
+    return {
+        "method": "ordinary_least_squares",
+        "available": True,
+        "years_analyzed": len(years),
+        "start_year": years[0],
+        "end_year": years[-1],
+        "slope_events_per_year": round(slope, 4),
+        "slope_events_per_decade": round(slope_per_decade, 2),
+        "direction": direction,
+        "insight": insight,
+    }
+
+
+
 def analyze_heatwaves(
     latitude: float,
     longitude: float,
@@ -173,6 +248,7 @@ def analyze_heatwaves(
         str(year): events_per_year.get(year, 0)
         for year in range(start_date.year, end_date.year + 1)
     }
+    trend = calculate_annual_trend(annual_frequency)
 
     durations = [event["duration_days"] for event in events]
 
@@ -202,6 +278,7 @@ def analyze_heatwaves(
         "summary": {
             "total_events": len(events),
             "annual_frequency": annual_frequency,
+            "trend": trend,
             "average_duration_days": (
                 round(sum(durations) / len(durations), 2)
                 if durations else 0
