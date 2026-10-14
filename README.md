@@ -4,33 +4,27 @@ A full-stack application for analyzing historical climate data, detecting heatwa
 
 ## Project Status
 
-**In development.** The initial heatwave-analysis backend is implemented and tested.
+**In development.** The FastAPI backend and React/TypeScript dashboard are implemented. The backend test suite currently contains 22 passing tests. Deployment and additional analysis features remain in progress.
 
 ### Implemented
 
-- FastAPI backend with health-check endpoint.
+**Backend**
+- FastAPI endpoints for health checks, weather previews, and heatwave analysis.
 - Historical daily maximum-temperature retrieval using the Open-Meteo Archive API.
-- Heatwave detection based on consecutive days exceeding their calendar-day-specific temperature thresholds.
-- Calendar-day percentile threshold calculation using a configurable moving window.
-- Historical baseline retrieval and heatwave analysis through an API endpoint.
-- Annual heatwave frequency and event-duration summaries.
-- Reporting of missing analysis dates.
-- Input validation and handling of weather API errors.
-- Automated tests covering heatwave detection, percentile calculations, and analysis behavior.
-
-**Current test status:** 22 passing tests.
-
-
-### Implemented
-
-- FastAPI backend for historical weather data retrieval and heatwave analysis.
-- React and TypeScript frontend with city and date-range selection.
-- Interactive charts for daily temperatures, thresholds, and annual heatwave frequency.
-- Summary cards for event count, longest duration, peak temperature, and average duration.
-- Heatwave event table and missing-data reporting.
+- Calendar-day-specific 95th-percentile threshold calculation using a configurable moving window.
+- Heatwave detection based on consecutive days exceeding their thresholds.
+- Annual event-frequency and event-duration summaries.
+- Missing-data reporting and input validation.
 - Automated backend tests.
 
-**Current test status:** 22 passing tests.
+**Frontend**
+- React and TypeScript dashboard with city and date-range selection.
+- Interactive daily temperature and threshold charts.
+- Annual heatwave-frequency chart.
+- Summary cards for event count, longest duration, peak temperature, and average duration.
+- Heatwave event table and data-quality information.
+
+**Current backend test status:** 22 passing tests.
 
 ### Planned
 
@@ -52,7 +46,9 @@ A full-stack application for analyzing historical climate data, detecting heatwa
 
 - React
 - TypeScript
-- Planned
+- Vite
+- Recharts
+- Lucide React
 
 ### Data Source
 
@@ -126,8 +122,13 @@ Annual frequency represents the number of detected events beginning in each year
 
 ### Prerequisites
 
-- Python 3.10 or later
-- Git
+Python 3.10 or later
+
+Node.js 20 or a compatible supported version
+
+npm
+
+Git
 
 ### 1. Clone the repository
 
@@ -154,11 +155,11 @@ From the `backend` directory, run:
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-Open these URLs in your browser:
+Open these URLs while the backend is running:
 
-- Health check: [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
-- Weather preview: [http://127.0.0.1:8000/api/weather-preview](http://127.0.0.1:8000/api/weather-preview)
-- Interactive API documentation: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- Health check: http://127.0.0.1:8000/api/health
+- Weather preview: http://127.0.0.1:8000/api/weather-preview
+- Interactive API documentation: http://127.0.0.1:8000/docs
 
 Use the interactive API documentation to test `/api/analyze` and configure the analysis coordinates, dates, baseline, percentile, moving window, and minimum event duration.
 
@@ -180,17 +181,15 @@ climate-hazard-trend-analyzer/
 │   ├── app/
 │   │   ├── main.py
 │   │   └── services/
-│   │       ├── weather.py
-│   │       ├── heatwave.py
-│   │       ├── thresholds.py
-│   │       └── analysis.py
 │   ├── tests/
-│   │   ├── test_health.py
-│   │   ├── test_heatwave.py
-│   │   ├── test_thresholds.py
-│   │   └── test_analysis.py
 │   └── requirements.txt
 ├── frontend/
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── App.css
+│   │   └── main.tsx
+│   ├── package.json
+│   └── vite.config.ts
 ├── .gitignore
 └── README.md
 ```
@@ -198,10 +197,17 @@ climate-hazard-trend-analyzer/
 ## Current Limitations
 
 - The current implementation focuses on heatwave analysis; other climate hazards are not yet implemented.
-- Historical weather data is fetched from the external API. Persistent caching and NoSQL storage are planned.
-- The React frontend has not yet been implemented.
-- Deployment and downloadable reports are planned.
+- Historical weather data is retrieved from the external Open-Meteo Archive API.
+- Persistent caching and NoSQL storage are planned.
+- Advanced statistical trend analysis and downloadable reports are planned.
+- Deployment of the frontend and backend is pending verification.
 
 ## License
 
 To be determined.
+
+## AI Tools and Usage Disclosure
+
+AI tools were used as development assistance for exploring implementation approaches, debugging, reviewing code, and improving project documentation.
+
+The application code, analytical methods, and outputs should be reviewed and tested by the developer. AI-generated suggestions are not treated as a substitute for verification or understanding of the implementation.
