@@ -22,3 +22,19 @@ build/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Vite local environment files
+*.local
+
+# TypeScript build information
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Python linting caches
+.mypy_cache/
+.ruff_cache/

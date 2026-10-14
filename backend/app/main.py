@@ -1,6 +1,6 @@
 
 from datetime import date
-
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, HTTPException, Query
 
 from app.services.analysis import analyze_heatwaves
@@ -10,6 +10,14 @@ app = FastAPI(
     title="Climate Hazard Trend Analyzer",
     description="Analyze historical climate hazards.",
     version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=False,
+    allow_methods=["GET"],
+    allow_headers=["*"],
 )
 
 

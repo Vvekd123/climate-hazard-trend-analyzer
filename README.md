@@ -20,9 +20,20 @@ A full-stack application for analyzing historical climate data, detecting heatwa
 
 **Current test status:** 22 passing tests.
 
+
+### Implemented
+
+- FastAPI backend for historical weather data retrieval and heatwave analysis.
+- React and TypeScript frontend with city and date-range selection.
+- Interactive charts for daily temperatures, thresholds, and annual heatwave frequency.
+- Summary cards for event count, longest duration, peak temperature, and average duration.
+- Heatwave event table and missing-data reporting.
+- Automated backend tests.
+
+**Current test status:** 22 passing tests.
+
 ### Planned
 
-- React and TypeScript frontend with interactive charts and filters.
 - Persistent storage and caching using a NoSQL database.
 - Additional climate hazard types and trend-analysis capabilities.
 - Downloadable analysis reports.
