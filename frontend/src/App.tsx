@@ -23,7 +23,8 @@ import {
 } from "recharts";
 import "./App.css";
 
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 const regions = {
   Bengaluru: { latitude: 12.9716, longitude: 77.5946 },
