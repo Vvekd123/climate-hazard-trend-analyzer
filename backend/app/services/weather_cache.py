@@ -65,37 +65,46 @@ def get_cached_observations(
     start_date: date,
     end_date: date,
 ):
-    """Return cached records only when every requested date is present."""
+    """
+    Return available cached weather records for the requested period.
+
+    None means MongoDB is unavailable.
+    An empty list means MongoDB is available but no records were found.
+    """
     collection = _get_collection()
+
     if collection is None:
         return None
 
-    # Consistent coordinate precision for cache keys.
     lat = round(latitude, 4)
     lon = round(longitude, 4)
 
     try:
-        records = list(collection.find(
-            {
-                "latitude": lat,
-                "longitude": lon,
-                "date": {
-                    "$gte": start_date.isoformat(),
-                    "$lte": end_date.isoformat(),
+        records = list(
+            collection.find(
+                {
+                    "latitude": lat,
+                    "longitude": lon,
+                    "date": {
+                        "$gte": start_date.isoformat(),
+                        "$lte": end_date.isoformat(),
+                    },
                 },
-            },
-            {"_id": 0, "date": 1, "temperature_max": 1},
-        ).sort("date", 1))
-
-        expected_days = (end_date - start_date).days + 1
-
-        if len(records) != expected_days:
-            return None
+                {
+                    "_id": 0,
+                    "date": 1,
+                    "temperature_max": 1,
+                },
+            ).sort("date", 1)
+        )
 
         return records
 
     except PyMongoError:
-        logger.warning("MongoDB cache read failed.", exc_info=True)
+        logger.warning(
+            "MongoDB cache read failed.",
+            exc_info=True,
+        )
         return None
 
 
