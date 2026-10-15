@@ -1,5 +1,6 @@
 
 from datetime import date, timedelta
+from math import isfinite
 
 import httpx
 
@@ -15,6 +16,27 @@ NASA_POWER_DAILY_URL = (
 
 class WeatherRateLimitError(RuntimeError):
     """Raised when the weather provider rate-limits a request."""
+
+
+def _normalize_temperature(raw_value: object, day: str) -> float | None:
+    if raw_value is None:
+        return None
+
+    if isinstance(raw_value, bool):
+        raise RuntimeError(f"Invalid temperature value for {day}")
+
+    try:
+        temperature = float(raw_value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError(
+            f"Invalid temperature value for {day}"
+        ) from exc
+
+    # NASA POWER uses -999 for unavailable parameter values.
+    if temperature == -999 or not isfinite(temperature):
+        return None
+
+    return temperature
 
 
 def _fetch_from_nasa_power(
@@ -93,20 +115,7 @@ def _fetch_from_nasa_power(
     while current <= end_date:
         day = current.isoformat()
         raw_value = values.get(current.strftime("%Y%m%d"))
-
-        # NASA POWER uses -999 for unavailable parameter values.
-        temperature = None
-
-        if raw_value is not None:
-            try:
-                numeric_value = float(raw_value)
-            except (TypeError, ValueError) as exc:
-                raise RuntimeError(
-                    f"Invalid temperature value for {day}"
-                ) from exc
-
-            if numeric_value != -999:
-                temperature = numeric_value
+        temperature = _normalize_temperature(raw_value, day)
 
         observations.append({
             "date": day,
@@ -147,6 +156,16 @@ def fetch_daily_max_temperatures(
             "MongoDB cache is unavailable. "
             "Restore the database connection before fetching data."
         )
+
+    cached = [
+        {
+            **item,
+            "temperature_max": _normalize_temperature(
+                item.get("temperature_max"), item["date"]
+            ),
+        }
+        for item in cached
+    ]
 
     observations_by_date = {
         item["date"]: item for item in cached
@@ -205,12 +224,63 @@ def fetch_daily_max_temperatures(
             if saved is None or len(saved) != len(fetched):
                 raise RuntimeError(
                     "Could not verify the weather cache write. "
-                    "Check MongoDB connectivity and logs."
+                    "Check database connectivity and logs."
                 )
 
-            for item in saved:
-                observations_by_date[item["date"]] = item
+            expected_by_date = {}
+            for item in fetched:
+                day = item.get("date")
+                if not isinstance(day, str) or day in expected_by_date:
+                    raise RuntimeError(
+                        "Could not verify the weather cache write. "
+                        "Check database connectivity and logs."
+                    )
 
+                expected_by_date[day] = _normalize_temperature(
+                    item.get("temperature_max"), day
+                )
+
+            saved_by_date = {}
+            for item in saved:
+                day = item.get("date")
+                if (
+                    not isinstance(day, str)
+                    or day not in expected_by_date
+                    or day in saved_by_date
+                ):
+                    raise RuntimeError(
+                        "Could not verify the weather cache write. "
+                        "Check database connectivity and logs."
+                    )
+
+                try:
+                    temperature = _normalize_temperature(
+                        item.get("temperature_max"), day
+                    )
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        "Could not verify the weather cache write. "
+                        "Check database connectivity and logs."
+                    ) from exc
+
+                if temperature != expected_by_date[day]:
+                    raise RuntimeError(
+                        "Could not verify the weather cache write. "
+                        "Check database connectivity and logs."
+                    )
+
+                saved_by_date[day] = {
+                    **item,
+                    "temperature_max": temperature,
+                }
+
+            if saved_by_date.keys() != expected_by_date.keys():
+                raise RuntimeError(
+                    "Could not verify the weather cache write. "
+                    "Check database connectivity and logs."
+                )
+
+            observations_by_date.update(saved_by_date)
             chunk_start = chunk_end + timedelta(days=1)
 
     return [

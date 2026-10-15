@@ -56,10 +56,23 @@ type AnalysisResponse = {
     analysis_records_received: number;
     missing_analysis_dates: string[];
     missing_analysis_date_count: number;
+    missing_temperature_dates: string[];
+    missing_temperature_date_count: number;
   };
   summary: {
     total_events: number;
     annual_frequency: Record<string, number>;
+    trend: {
+      available: boolean;
+      years_analyzed: number;
+      slope_events_per_year: number | null;
+      slope_events_per_decade: number | null;
+      direction: string;
+      insight: string;
+      reason?: string;
+      start_year?: number;
+      end_year?: number;
+    };
     average_duration_days: number;
     longest_event_days: number;
   };
@@ -492,10 +505,12 @@ function App() {
                   </p>
                 </div>
               </div>
-              {analysis.data_quality.missing_analysis_date_count > 0 && (
+              {(analysis.data_quality.missing_analysis_date_count > 0 ||
+                analysis.data_quality.missing_temperature_date_count > 0) && (
                 <p className="summary-warning" role="status">
-                  <strong>Incomplete date coverage:</strong>{" "}
-                  {analysis.data_quality.missing_analysis_date_count} date(s) are missing from the analysis period.
+                  <strong>Incomplete data coverage:</strong>{" "}
+                  {analysis.data_quality.missing_analysis_date_count} calendar date(s) are missing;{" "}
+                  {analysis.data_quality.missing_temperature_date_count} date(s) have no temperature measurement.
                 </p>
               )}
               <p className="summary-method">
@@ -601,7 +616,11 @@ function App() {
             <div className="chart-heading">
               <div>
                 <h2 id="annual-frequency-title">Annual heatwave event count</h2>
-                <p>Qualifying events grouped by the calendar year in which each event started.</p>
+                <p>
+                  {analysis
+                    ? `Qualifying events grouped by start year. ${analysis.summary.trend.insight} Complete calendar years available: ${analysis.summary.trend.years_analyzed}. Missing observations are reported separately and can affect counts; trend estimates are descriptive, not statistical significance tests.`
+                    : "Qualifying events grouped by start year. Trend estimates require at least five complete calendar years; missing observations can affect counts. Estimates are descriptive, not statistical significance tests."}
+                </p>
               </div>
               <div className="chart-unit">Events · year</div>
             </div>
@@ -662,14 +681,23 @@ function App() {
                 <h2>Data quality and detected events</h2>
                 <p>
                   {analysis.data_quality.analysis_records_received} daily records received. {" "}
-                  {analysis.data_quality.missing_analysis_date_count} missing dates.
+                  {analysis.data_quality.missing_analysis_date_count} missing calendar dates;{" "}
+                  {analysis.data_quality.missing_temperature_date_count} missing temperature measurements.
                 </p>
               </div>
             </div>
 
-            {analysis.data_quality.missing_analysis_date_count > 0 && (
+            {(analysis.data_quality.missing_analysis_date_count > 0 ||
+              analysis.data_quality.missing_temperature_date_count > 0) && (
               <p className="warning-text">
-                Missing dates: {analysis.data_quality.missing_analysis_dates.join(", ")}
+                {analysis.data_quality.missing_analysis_date_count > 0 && (
+                  <>Missing calendar dates: {analysis.data_quality.missing_analysis_dates.join(", ")}</>
+                )}
+                {analysis.data_quality.missing_analysis_date_count > 0 &&
+                  analysis.data_quality.missing_temperature_date_count > 0 && " · "}
+                {analysis.data_quality.missing_temperature_date_count > 0 && (
+                  <>Missing temperature measurements: {analysis.data_quality.missing_temperature_dates.join(", ")}</>
+                )}
               </p>
             )}
 

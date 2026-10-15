@@ -1,9 +1,11 @@
+import json
 from datetime import date
+
 import httpx
 import pytest
+
 from app.services import weather
 from app.services.weather import WeatherRateLimitError
-from app.services import weather
 
 
 def setup_fake_cache(monkeypatch, initial_records=None):
@@ -44,6 +46,27 @@ def setup_fake_cache(monkeypatch, initial_records=None):
     return records
 
 
+def setup_cache_readback(monkeypatch, fetched, readback):
+    read_count = 0
+
+    def fake_get(latitude, longitude, start_date, end_date):
+        nonlocal read_count
+        read_count += 1
+        if read_count == 1:
+            return []
+        if readback is None:
+            return None
+        return [item.copy() for item in readback]
+
+    monkeypatch.setattr(weather, "get_cached_observations", fake_get)
+    monkeypatch.setattr(weather, "save_observations", lambda *args: True)
+    monkeypatch.setattr(
+        weather,
+        "_fetch_from_nasa_power",
+        lambda *args: [item.copy() for item in fetched],
+    )
+
+
 def test_cache_hit_skips_nasa_power(monkeypatch):
     cached = [
         {"date": "2020-05-01", "temperature_max": 35.0},
@@ -66,18 +89,15 @@ def test_cache_hit_skips_nasa_power(monkeypatch):
     assert result == cached
 
 
-def test_cache_miss_fetches_and_saves(monkeypatch):
+def test_cache_miss_fetches_saves_and_verifies_readback(monkeypatch):
     fetched = [
         {"date": "2020-05-01", "temperature_max": 35.0},
         {"date": "2020-05-02", "temperature_max": 36.0},
     ]
-    saved = []
-
     saved = setup_fake_cache(monkeypatch)
     monkeypatch.setattr(
         weather, "_fetch_from_nasa_power", lambda *args: fetched
     )
-    
 
     result = weather.fetch_daily_max_temperatures(
         12.9716, 77.5946, date(2020, 5, 1), date(2020, 5, 2)
@@ -92,7 +112,6 @@ def test_empty_cache_result_triggers_fetch(monkeypatch):
     fetched = [
         {"date": "2020-05-01", "temperature_max": 35.0},
     ]
-    saved = []
     saved = setup_fake_cache(monkeypatch)
 
     monkeypatch.setattr(
@@ -106,8 +125,9 @@ def test_empty_cache_result_triggers_fetch(monkeypatch):
     assert result == fetched
     assert saved == fetched
 
+
 def test_partial_cache_fetches_only_missing_dates(monkeypatch):
-    from datetime import date, timedelta
+    from datetime import timedelta
 
     cached = [
         {"date": "2020-05-01", "temperature_max": 32.8},
@@ -116,8 +136,8 @@ def test_partial_cache_fetches_only_missing_dates(monkeypatch):
     ]
 
     fetched_ranges = []
-    saved = []
-    saved = setup_fake_cache(monkeypatch, cached)   
+    saved = setup_fake_cache(monkeypatch, cached)
+
     def fake_fetch(latitude, longitude, start_date, end_date):
         fetched_ranges.append((start_date, end_date))
         records = []
@@ -149,6 +169,7 @@ def test_partial_cache_fetches_only_missing_dates(monkeypatch):
     assert len(saved) == 7
     assert len([item for item in saved if item["date"] >= "2020-05-04"]) == 4
 
+
 def test_nasa_power_429_raises_rate_limit_error(monkeypatch):
     response = httpx.Response(
         429,
@@ -171,6 +192,277 @@ def test_nasa_power_429_raises_rate_limit_error(monkeypatch):
             date(2020, 5, 1),
             date(2020, 5, 3),
         )
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [float("nan"), float("inf"), float("-inf"), -999],
+)
+def test_invalid_and_fill_temperatures_are_cached_as_missing(
+    monkeypatch,
+    raw_value,
+):
+    saved = setup_fake_cache(monkeypatch)
+    response = httpx.Response(
+        200,
+        content=json.dumps(
+            {
+                "properties": {
+                    "parameter": {
+                        "T2M_MAX": {"20200501": raw_value},
+                    }
+                }
+            },
+            allow_nan=True,
+        ).encode(),
+        headers={"content-type": "application/json"},
+        request=httpx.Request("GET", weather.NASA_POWER_DAILY_URL),
+    )
+    monkeypatch.setattr(
+        weather.httpx,
+        "get",
+        lambda *args, **kwargs: response,
+    )
+
+    result = weather.fetch_daily_max_temperatures(
+        12.9716,
+        77.5946,
+        date(2020, 5, 1),
+        date(2020, 5, 1),
+    )
+
+    expected = [{"date": "2020-05-01", "temperature_max": None}]
+    assert result == expected
+    assert saved == expected
+    json.dumps(result, allow_nan=False)
+
+
+def test_non_numeric_nasa_temperature_keeps_runtime_error(monkeypatch):
+    saved = setup_fake_cache(monkeypatch)
+    response = httpx.Response(
+        200,
+        json={
+            "properties": {
+                "parameter": {
+                    "T2M_MAX": {"20200501": "not-a-temperature"},
+                }
+            }
+        },
+        request=httpx.Request("GET", weather.NASA_POWER_DAILY_URL),
+    )
+    monkeypatch.setattr(
+        weather.httpx,
+        "get",
+        lambda *args, **kwargs: response,
+    )
+
+    with pytest.raises(RuntimeError, match="Invalid temperature value"):
+        weather.fetch_daily_max_temperatures(
+            12.9716,
+            77.5946,
+            date(2020, 5, 1),
+            date(2020, 5, 1),
+        )
+
+    assert saved == []
+
+
+def test_missing_nasa_value_is_returned_and_cached_as_none(monkeypatch):
+    saved = setup_fake_cache(monkeypatch)
+    response = httpx.Response(
+        200,
+        json={"properties": {"parameter": {"T2M_MAX": {}}}},
+        request=httpx.Request("GET", weather.NASA_POWER_DAILY_URL),
+    )
+    monkeypatch.setattr(
+        weather.httpx,
+        "get",
+        lambda *args, **kwargs: response,
+    )
+
+    result = weather.fetch_daily_max_temperatures(
+        12.9716,
+        77.5946,
+        date(2020, 5, 1),
+        date(2020, 5, 1),
+    )
+
+    assert result[0]["temperature_max"] is None
+    assert saved[0]["temperature_max"] is None
+
+
+def test_cache_readback_accepts_matching_none_temperature(monkeypatch):
+    fetched = [{"date": "2020-05-01", "temperature_max": None}]
+    setup_cache_readback(monkeypatch, fetched, fetched)
+
+    result = weather.fetch_daily_max_temperatures(
+        12.9716,
+        77.5946,
+        date(2020, 5, 1),
+        date(2020, 5, 1),
+    )
+
+    assert result == fetched
+
+
+@pytest.mark.parametrize(
+    "saved_temperature",
+    [float("nan"), float("inf"), float("-inf"), -999],
+)
+def test_cache_readback_normalizes_missing_temperature_values(
+    monkeypatch,
+    saved_temperature,
+):
+    fetched = [{"date": "2020-05-01", "temperature_max": None}]
+    readback = [{"date": "2020-05-01", "temperature_max": saved_temperature}]
+    setup_cache_readback(monkeypatch, fetched, readback)
+
+    result = weather.fetch_daily_max_temperatures(
+        12.9716,
+        77.5946,
+        date(2020, 5, 1),
+        date(2020, 5, 1),
+    )
+
+    assert result == fetched
+
+
+def test_cache_readback_rejects_missing_and_unexpected_dates(monkeypatch):
+    fetched = [
+        {"date": "2020-05-01", "temperature_max": 35.0},
+        {"date": "2020-05-02", "temperature_max": 36.0},
+    ]
+    readback = [
+        {"date": "2020-05-01", "temperature_max": 35.0},
+        {"date": "2020-05-03", "temperature_max": 36.0},
+    ]
+    setup_cache_readback(monkeypatch, fetched, readback)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Could not verify the weather cache write",
+    ):
+        weather.fetch_daily_max_temperatures(
+            12.9716,
+            77.5946,
+            date(2020, 5, 1),
+            date(2020, 5, 2),
+        )
+
+
+def test_cache_readback_rejects_duplicate_dates(monkeypatch):
+    fetched = [
+        {"date": "2020-05-01", "temperature_max": 35.0},
+        {"date": "2020-05-02", "temperature_max": 36.0},
+    ]
+    readback = [
+        {"date": "2020-05-01", "temperature_max": 35.0},
+        {"date": "2020-05-01", "temperature_max": 36.0},
+    ]
+    setup_cache_readback(monkeypatch, fetched, readback)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Could not verify the weather cache write",
+    ):
+        weather.fetch_daily_max_temperatures(
+            12.9716,
+            77.5946,
+            date(2020, 5, 1),
+            date(2020, 5, 2),
+        )
+
+
+def test_cache_readback_rejects_temperature_mismatch(monkeypatch):
+    fetched = [
+        {"date": "2020-05-01", "temperature_max": 35.0},
+        {"date": "2020-05-02", "temperature_max": 36.0},
+    ]
+    readback = [
+        {"date": "2020-05-01", "temperature_max": 35.0},
+        {"date": "2020-05-02", "temperature_max": 99.0},
+    ]
+    setup_cache_readback(monkeypatch, fetched, readback)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Could not verify the weather cache write",
+    ):
+        weather.fetch_daily_max_temperatures(
+            12.9716,
+            77.5946,
+            date(2020, 5, 1),
+            date(2020, 5, 2),
+        )
+
+
+def test_failed_cache_write_preserves_existing_error(monkeypatch):
+    fetched = [{"date": "2020-05-01", "temperature_max": 35.0}]
+    monkeypatch.setattr(
+        weather, "get_cached_observations", lambda *args: []
+    )
+    monkeypatch.setattr(weather, "save_observations", lambda *args: False)
+    monkeypatch.setattr(
+        weather,
+        "_fetch_from_nasa_power",
+        lambda *args: fetched,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Could not save weather data to MongoDB",
+    ):
+        weather.fetch_daily_max_temperatures(
+            12.9716,
+            77.5946,
+            date(2020, 5, 1),
+            date(2020, 5, 1),
+        )
+
+
+def test_cache_readback_failure_preserves_existing_error(monkeypatch):
+    fetched = [{"date": "2020-05-01", "temperature_max": 35.0}]
+    setup_cache_readback(monkeypatch, fetched, None)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Could not verify the weather cache write",
+    ):
+        weather.fetch_daily_max_temperatures(
+            12.9716,
+            77.5946,
+            date(2020, 5, 1),
+            date(2020, 5, 1),
+        )
+
+
+@pytest.mark.parametrize(
+    "cached_value",
+    [float("nan"), float("inf"), float("-inf"), -999],
+)
+def test_invalid_cached_temperatures_are_returned_as_none(
+    monkeypatch,
+    cached_value,
+):
+    cached = [{"date": "2020-05-01", "temperature_max": cached_value}]
+    monkeypatch.setattr(
+        weather, "get_cached_observations", lambda *args: cached
+    )
+
+    def unexpected_fetch(*args):
+        raise AssertionError("A cache hit should not fetch NASA POWER")
+
+    monkeypatch.setattr(weather, "_fetch_from_nasa_power", unexpected_fetch)
+
+    result = weather.fetch_daily_max_temperatures(
+        12.9716,
+        77.5946,
+        date(2020, 5, 1),
+        date(2020, 5, 1),
+    )
+
+    assert result[0]["temperature_max"] is None
+
 
 def test_large_missing_range_is_fetched_in_chunks(monkeypatch):
     from datetime import timedelta

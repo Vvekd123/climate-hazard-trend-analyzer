@@ -161,6 +161,46 @@ def test_reports_missing_analysis_dates(monkeypatch):
         "2020-05-04"
     ]
     assert result["data_quality"]["missing_analysis_date_count"] == 1
+    assert result["data_quality"]["missing_temperature_dates"] == []
+    assert result["data_quality"]["missing_temperature_date_count"] == 0
+
+
+def test_reports_missing_measurements_separately_from_missing_dates(
+    monkeypatch,
+):
+    baseline = make_baseline()
+    observations = make_analysis_observations()
+    observations = [
+        item
+        for item in observations
+        if item["date"] != "2020-05-04"
+    ]
+    observations[4]["temperature_max"] = None
+
+    def fake_fetch(latitude, longitude, start_date, end_date):
+        if start_date == date(1991, 1, 1):
+            return baseline
+        return observations
+
+    monkeypatch.setattr(
+        analysis,
+        "fetch_daily_max_temperatures",
+        fake_fetch,
+    )
+
+    result = analysis.analyze_heatwaves(
+        latitude=12.9716,
+        longitude=77.5946,
+        start_date=date(2020, 5, 1),
+        end_date=date(2020, 5, 7),
+    )
+
+    quality = result["data_quality"]
+    assert quality["missing_analysis_dates"] == ["2020-05-04"]
+    assert quality["missing_analysis_date_count"] == 1
+    assert quality["missing_temperature_dates"] == ["2020-05-06"]
+    assert quality["missing_temperature_date_count"] == 1
+    assert quality["analysis_records_received"] == 6
 
 
 def test_rejects_invalid_latitude():
@@ -193,7 +233,7 @@ def test_increasing_annual_frequency():
         "2022": 3,
         "2023": 4,
         "2024": 5,
-    })
+    }, date(2020, 1, 1), date(2024, 12, 31))
 
     assert result["available"] is True
     assert result["direction"] == "increasing"
@@ -208,7 +248,7 @@ def test_decreasing_annual_frequency():
         "2022": 3,
         "2023": 2,
         "2024": 1,
-    })
+    }, date(2020, 1, 1), date(2024, 12, 31))
 
     assert result["direction"] == "decreasing"
     assert result["slope_events_per_year"] == -1.0
@@ -221,7 +261,7 @@ def test_stable_annual_frequency():
         "2022": 2,
         "2023": 2,
         "2024": 2,
-    })
+    }, date(2020, 1, 1), date(2024, 12, 31))
 
     assert result["direction"] == "stable"
     assert result["slope_events_per_year"] == 0.0
@@ -232,7 +272,47 @@ def test_short_period_has_no_trend():
         "2020": 1,
         "2021": 2,
         "2022": 3,
-    })
+    }, date(2020, 1, 1), date(2022, 12, 31))
 
     assert result["available"] is False
     assert result["direction"] == "insufficient_data"
+
+
+def test_partial_endpoint_years_are_excluded_from_trend():
+    result = calculate_annual_trend(
+        {
+            "2020": 1,
+            "2021": 2,
+            "2022": 3,
+            "2023": 4,
+            "2024": 5,
+        },
+        date(2020, 5, 1),
+        date(2024, 6, 30),
+    )
+
+    assert result["available"] is False
+    assert result["years_analyzed"] == 3
+    assert "complete calendar years" in result["reason"]
+
+
+def test_trend_uses_complete_years_between_partial_endpoints():
+    result = calculate_annual_trend(
+        {
+            "2019": 100,
+            "2020": 1,
+            "2021": 2,
+            "2022": 3,
+            "2023": 4,
+            "2024": 5,
+            "2025": 100,
+        },
+        date(2019, 5, 1),
+        date(2025, 12, 31),
+    )
+
+    assert result["available"] is True
+    assert result["years_analyzed"] == 6
+    assert result["start_year"] == 2020
+    assert result["end_year"] == 2025
+    assert result["direction"] == "increasing"
