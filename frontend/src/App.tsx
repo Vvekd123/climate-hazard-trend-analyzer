@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity,
   CalendarDays,
@@ -82,6 +82,16 @@ function formatDate(value: string) {
   });
 }
 
+function navigateTo(sectionId: string, focusTargetId?: string) {
+  document.getElementById(sectionId)?.scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
+  if (focusTargetId) {
+    document.getElementById(focusTargetId)?.focus({ preventScroll: true });
+  }
+}
+
 function TemperatureTooltip({
   active,
   payload,
@@ -121,6 +131,67 @@ function App() {
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [activeSection, setActiveSection] = useState("climate-overview");
+
+  useEffect(() => {
+    const sections = [
+      { id: "climate-overview", navId: "climate-overview" },
+      { id: "region-filters", navId: "region-filters" },
+      { id: "heatwave-summary", navId: "trend-analysis" },
+      { id: "daily-temperature-chart", navId: "trend-analysis" },
+      { id: "trend-analysis", navId: "trend-analysis" },
+    ];
+    let animationFrame = 0;
+
+    const updateActiveSection = () => {
+      const readingLine = Math.min(140, window.innerHeight * 0.2);
+      const currentSections = sections.filter((section) => {
+        const element = document.getElementById(section.id);
+        return element && element.getBoundingClientRect().top <= readingLine;
+      });
+      const currentSection = currentSections[currentSections.length - 1];
+      const annualChart = document.getElementById("trend-analysis");
+      const annualChartIsVisible =
+        annualChart && annualChart.getBoundingClientRect().top < window.innerHeight * 0.75;
+      const pageIsAtBottom =
+        window.innerHeight + window.scrollY >=
+        document.documentElement.scrollHeight - 2;
+      const nextActiveSection =
+        currentSection?.navId ??
+        (annualChartIsVisible || pageIsAtBottom
+          ? "trend-analysis"
+          : "climate-overview");
+
+      setActiveSection((current) =>
+        current === nextActiveSection ? current : nextActiveSection,
+      );
+    };
+    const scheduleActiveSectionUpdate = () => {
+      if (animationFrame) return;
+
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = 0;
+        updateActiveSection();
+      });
+    };
+    const mainContent = document.querySelector(".main-content");
+    const resizeObserver = new ResizeObserver(scheduleActiveSectionUpdate);
+
+    if (mainContent) resizeObserver.observe(mainContent);
+
+    window.addEventListener("scroll", scheduleActiveSectionUpdate, {
+      passive: true,
+    });
+    window.addEventListener("resize", scheduleActiveSectionUpdate);
+    updateActiveSection();
+
+    return () => {
+      window.removeEventListener("scroll", scheduleActiveSectionUpdate);
+      window.removeEventListener("resize", scheduleActiveSectionUpdate);
+      resizeObserver.disconnect();
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+    };
+  }, []);
 
   async function handleAnalyze() {
     if (!startDate || !endDate) {
@@ -210,26 +281,43 @@ function App() {
           </div>
         </div>
 
-        <div className="nav-label">WORKSPACE</div>
-        <div className="nav-item active">
-          <Activity size={18} /> Climate overview
-        </div>
-        <div className="nav-item">
-          <TrendingUp size={18} /> Trend analysis
-        </div>
-        <div className="nav-item">
-          <MapPin size={18} /> Regions
-        </div>
+        <div className="nav-label" id="workspace-nav-label">WORKSPACE</div>
+        <nav className="sidebar-nav" aria-labelledby="workspace-nav-label">
+          <button
+            type="button"
+            className={`nav-item${activeSection === "climate-overview" ? " active" : ""}`}
+            aria-current={activeSection === "climate-overview" ? "location" : undefined}
+            onClick={() => navigateTo("climate-overview")}
+          >
+            <Activity size={18} /> Climate overview
+          </button>
+          <button
+            type="button"
+            className={`nav-item${activeSection === "trend-analysis" ? " active" : ""}`}
+            aria-current={activeSection === "trend-analysis" ? "location" : undefined}
+            onClick={() => navigateTo("trend-analysis")}
+          >
+            <TrendingUp size={18} /> Trend analysis
+          </button>
+          <button
+            type="button"
+            className={`nav-item${activeSection === "region-filters" ? " active" : ""}`}
+            aria-current={activeSection === "region-filters" ? "location" : undefined}
+            onClick={() => navigateTo("region-filters", "region")}
+          >
+            <MapPin size={18} /> Regions
+          </button>
+        </nav>
 
         <div className="sidebar-bottom">
           <div className="status-dot" />
           Historical weather analysis
-          <p>Powered by Open-Meteo</p>
+          <p>Powered by NASA POWER</p>
         </div>
       </aside>
 
       <main className="main-content">
-        <header className="topbar">
+        <header className="topbar" id="climate-overview">
           <div>
             <p className="eyebrow">CLIMATE MONITORING / OVERVIEW</p>
             <h1>Climate hazard analyzer</h1>
@@ -240,7 +328,7 @@ function App() {
           <div className="live-badge"><span /> Historical data</div>
         </header>
 
-        <section className="filters panel">
+        <section className="filters panel" id="region-filters" aria-label="Analysis filters">
           <div className="filter-field">
             <label htmlFor="region">Region</label>
             <select
@@ -286,11 +374,23 @@ function App() {
             className="analyze-button"
             onClick={handleAnalyze}
             disabled={loading}
+            aria-busy={loading}
           >
             <RefreshCw size={16} className={loading ? "spin" : ""} />
             {loading ? "Analyzing..." : "Analyze"}
           </button>
         </section>
+
+        {loading && (
+          <div className="loading-banner" role="status" aria-live="polite">
+            <RefreshCw size={16} className="spin" />
+            <span>
+              {analysis
+                ? "Refreshing analysis. Your previous results remain visible until this request completes."
+                : "Retrieving NASA POWER observations and calculating heatwave thresholds."}
+            </span>
+          </div>
+        )}
 
         {error && (
           <div className="error-banner" role="alert">
@@ -320,7 +420,9 @@ function App() {
           <article className="stat-card panel">
             <div className="stat-top"><span>Longest duration</span><CalendarDays /></div>
             <div className="stat-value">
-              {analysis ? analysis.summary.longest_event_days : "—"} <small>days</small>
+              {analysis && analysis.summary.total_events > 0
+                ? analysis.summary.longest_event_days
+                : "—"} <small>days</small>
             </div>
             <p className="stat-note">Longest qualifying event</p>
           </article>
@@ -336,17 +438,83 @@ function App() {
           <article className="stat-card panel">
             <div className="stat-top"><span>Average duration</span><TrendingUp /></div>
             <div className="stat-value">
-              {analysis ? analysis.summary.average_duration_days : "—"}<small> days</small>
+              {analysis && analysis.summary.total_events > 0
+                ? analysis.summary.average_duration_days
+                : "—"}<small> days</small>
             </div>
             <p className="stat-note">Across detected events</p>
           </article>
         </section>
 
-        <section className="chart-panel panel">
+        <section className="summary-panel panel" id="heatwave-summary" aria-labelledby="heatwave-summary-title">
           <div className="chart-heading">
             <div>
-              <h2>Daily temperature vs threshold</h2>
-              <p>Daily maximum temperature compared with the 95th-percentile threshold</p>
+              <h2 id="heatwave-summary-title">Heatwave summary</h2>
+              <p>
+                {analysis
+                  ? `${formatDate(analysis.analysis_period.start_date)} – ${formatDate(analysis.analysis_period.end_date)}`
+                  : "Selected analysis period and detected event insights"}
+              </p>
+            </div>
+            {analysis && <div className="chart-unit">Analysis period</div>}
+          </div>
+
+          {analysis ? (
+            <>
+              <div className="summary-content">
+                <div className="summary-total">
+                  <span>Qualifying heatwave events</span>
+                  <strong>{analysis.summary.total_events}</strong>
+                  <p>
+                    {analysis.events.length === 0
+                      ? "No qualifying heatwaves were detected in this period."
+                      : "Detected during the selected period."}
+                  </p>
+                </div>
+                <div className="summary-details">
+                  <p>
+                    <strong>Longest event</strong>
+                    {analysis.summary.total_events > 0
+                      ? `${analysis.summary.longest_event_days} days`
+                      : "No qualifying event"}
+                  </p>
+                  <p>
+                    <strong>Highest observed daily maximum</strong>
+                    {peakTemperature === null
+                      ? "Unavailable: no temperature observations"
+                      : `${peakTemperature.toFixed(1)} °C`}
+                  </p>
+                  <p>
+                    <strong>Average event duration</strong>
+                    {analysis.summary.total_events > 0
+                      ? `${analysis.summary.average_duration_days} days`
+                      : "Not available without qualifying events"}
+                  </p>
+                </div>
+              </div>
+              {analysis.data_quality.missing_analysis_date_count > 0 && (
+                <p className="summary-warning" role="status">
+                  <strong>Incomplete date coverage:</strong>{" "}
+                  {analysis.data_quality.missing_analysis_date_count} date(s) are missing from the analysis period.
+                </p>
+              )}
+              <p className="summary-method">
+                The detector requires daily maximum temperatures to exceed their applicable thresholds for at least three consecutive calendar days. Missing dates or measurements break a run.
+              </p>
+            </>
+          ) : (
+            <div className="summary-empty">
+              <Activity size={20} />
+              <p>Run an analysis to see the selected period, observed temperatures, and any qualifying heatwave events.</p>
+            </div>
+          )}
+        </section>
+
+        <section className="chart-panel panel" id="daily-temperature-chart" aria-labelledby="daily-temperature-title">
+          <div className="chart-heading">
+            <div>
+              <h2 id="daily-temperature-title">Daily maximum temperature and threshold</h2>
+              <p>Observed daily maximums compared with the applicable 95th-percentile threshold.</p>
             </div>
             <div className="chart-unit">Temperature · °C</div>
           </div>
@@ -398,27 +566,47 @@ function App() {
                   />
                 </LineChart>
               </ResponsiveContainer>
+            ) : analysis ? (
+              <div className="empty-chart">No daily observations are available for this analysis period.</div>
             ) : (
-              <div className="empty-chart">
-                {loading
-                  ? "Fetching historical data and calculating thresholds..."
-                  : "Run an analysis to display real historical temperatures."}
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <Thermometer size={25} />
               </div>
-            )}
+
+              <h3>
+                {loading
+                  ? "Analyzing historical climate data"
+                  : "Your climate analysis starts here"}
+              </h3>
+
+              <p>
+                {loading
+                  ? "Retrieving weather observations and calculating heatwave thresholds. This may take a little while on the first request."
+                  : "Choose a region and date range above, then select Analyze to explore daily temperatures and heatwave thresholds."}
+              </p>
+
+              {!loading && (
+                <div className="empty-state-hint">
+                  <Activity size={15} />
+                  <span>Daily temperatures · 95th-percentile threshold · Heatwave events</span>
+                </div>
+              )}
+            </div>
+          )}
           </div>
         </section>
 
-        {analysis && (
-          <section className="chart-panel panel">
+        <section className="chart-panel panel" id="trend-analysis" aria-labelledby="annual-frequency-title">
             <div className="chart-heading">
               <div>
-                <h2>Annual heatwave frequency</h2>
-                <p>Detected events grouped by the calendar year in which each event started</p>
+                <h2 id="annual-frequency-title">Annual heatwave event count</h2>
+                <p>Qualifying events grouped by the calendar year in which each event started.</p>
               </div>
               <div className="chart-unit">Events · year</div>
             </div>
             <div className="chart-container">
-              {annualFrequencyData.length > 0 ? (
+              {analysis && annualFrequencyData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={annualFrequencyData} margin={{ top: 12, right: 18, left: 4, bottom: 4 }}>
                     <CartesianGrid stroke="#e8eee9" strokeDasharray="3 3" vertical={false} />
@@ -437,6 +625,7 @@ function App() {
                       axisLine={false}
                       width={42}
                     />
+                    <Legend verticalAlign="top" height={34} />
                     <Tooltip
                       formatter={(value) => [value, "Heatwave events"]}
                       labelFormatter={(label) => `Year ${label}`}
@@ -457,14 +646,17 @@ function App() {
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="empty-chart">No annual frequency data is available for this period.</div>
+                <div className="empty-chart">
+                  {analysis
+                    ? "No annual frequency data is available for this period."
+                    : "Run an analysis to view annual heatwave event counts."}
+                </div>
               )}
             </div>
-          </section>
-        )}
+        </section>
 
         {analysis && (
-          <section className="chart-panel panel events-panel">
+          <section className="chart-panel panel events-panel" id="heatwave-events">
             <div className="chart-heading">
               <div>
                 <h2>Data quality and detected events</h2>
@@ -513,7 +705,7 @@ function App() {
         <footer className="dashboard-footer">
           <Waves size={16} />
           <span>ClimateScope · Historical climate analysis</span>
-          <span>Data source: Open-Meteo Archive API</span>
+          <span>Data source: NASA POWER Daily API</span>
         </footer>
       </main>
     </div>
