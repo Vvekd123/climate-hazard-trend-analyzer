@@ -146,6 +146,8 @@ Analysis responses distinguish calendar dates absent from the returned observati
 
 The application also checks valid inputs and consecutive calendar-day requirements. Missing temperature measurements break a heatwave run.
 
+See the [Weather Source Comparison Audit](audit/weather-source-comparison.md) for the daily comparison data, returned metadata, calculation metrics, and methodology for the Bengaluru sample.
+
 During development, NASA POWER data was compared with Open-Meteo historical temperature data for Bengaluru for May 1–10, 2020.
 
 The comparison against Open-Meteo's ERA5-Land dataset showed a mean absolute difference of approximately 2.32°C and a maximum absolute difference of approximately 4.13°C over the ten-day sample.
