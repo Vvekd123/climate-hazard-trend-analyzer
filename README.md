@@ -138,11 +138,13 @@ The application summarizes annual heatwave frequency and event duration to help 
 
 Annual frequency counts an event in the calendar year in which it begins. An event crossing December 31 is counted in its start year rather than split across two years.
 
-Trend results should be interpreted in the context of data completeness, baseline selection, and the limitations of gridded weather data. A trend in detected events is not, by itself, proof of causation.
+Trend estimates use only year buckets whose requested analysis period covers January 1 through December 31, excluding partial endpoint years, and require at least five such years. Missing dates and measurements within those years are reported but do not exclude the year from the regression, so they can affect annual counts. Estimates are descriptive ordinary-least-squares slopes, not statistical significance tests. Interpret them in the context of data completeness, baseline selection, and the limitations of gridded weather data; a trend in detected events is not, by itself, proof of causation.
 
 ## Data Quality and Validation
 
-The application includes checks for missing dates, missing temperature observations, valid inputs, and consecutive calendar-day requirements.
+Analysis responses distinguish calendar dates absent from the returned observations (`missing_analysis_date_count`) from returned dates without a valid maximum-temperature measurement (`missing_temperature_date_count`). Missing values, NASA's -999 fill value, and non-finite temperatures are represented as null and are not used as temperatures. Malformed non-numeric values retain the existing upstream-error response path.
+
+The application also checks valid inputs and consecutive calendar-day requirements. Missing temperature measurements break a heatwave run.
 
 During development, NASA POWER data was compared with Open-Meteo historical temperature data for Bengaluru for May 1–10, 2020.
 
@@ -176,7 +178,15 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Configure the MongoDB connection using the environment-variable names expected by the backend code. Keep credentials in local environment configuration; never commit database credentials or API secrets.
+Configure the MongoDB connection using the `MONGODB_URI` environment variable.
+
+For local development, set it in your terminal or a local environment configuration that is excluded from Git. For example, in PowerShell:
+
+```powershell
+$env:MONGODB_URI = "your-mongodb-connection-string"
+```
+
+Never commit database credentials or connection strings to the repository. MongoDB Atlas must be configured and reachable for persistent weather caching.
 
 ### 3. Start the backend
 
@@ -204,7 +214,7 @@ From the `backend` directory:
 .\.venv\Scripts\python.exe -m pytest -v
 ```
 
-The current local test suite contains **32 tests**, covering climate analysis, threshold calculation, heatwave detection, and weather caching.
+The current local test suite contains **55 tests**, covering climate analysis, threshold calculation, heatwave detection, and weather caching.
 
 ### 5. Set up the frontend
 

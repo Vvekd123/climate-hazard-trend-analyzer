@@ -62,41 +62,53 @@ def _find_missing_dates(
     return missing_dates
 
 
-def calculate_annual_trend(annual_frequency: dict[str, int]) -> dict:
+def calculate_annual_trend(
+    annual_frequency: dict[str, int],
+    start_date: date,
+    end_date: date,
+) -> dict:
     """
-    Calculate a descriptive linear trend in annual heatwave frequency.
+    Calculate a descriptive trend from complete calendar years only.
 
-    The slope represents the change in heatwave events per year.
-    This is a descriptive regression, not a statistical significance test.
+    The slope represents the change in heatwave events per year. It is
+    descriptive and is not a statistical significance test.
     """
     years = sorted(int(year) for year in annual_frequency)
+    complete_years = [
+        year
+        for year in years
+        if (year > start_date.year or start_date == date(year, 1, 1))
+        and (year < end_date.year or end_date == date(year, 12, 31))
+    ]
 
-    if len(years) < 5:
+    if len(complete_years) < 5:
         return {
             "method": "ordinary_least_squares",
             "available": False,
-            "reason": "At least 5 calendar years are required.",
-            "years_analyzed": len(years),
+            "reason": "At least 5 complete calendar years are required.",
+            "years_analyzed": len(complete_years),
             "slope_events_per_year": None,
             "slope_events_per_decade": None,
             "direction": "insufficient_data",
             "insight": (
-                "Trend analysis requires at least 5 calendar years "
-                "of data."
+                "Trend estimation requires at least 5 complete calendar "
+                "years; partial endpoint years are excluded."
             ),
         }
 
     # Center the years to keep the calculation numerically stable.
-    mean_year = sum(years) / len(years)
-    frequencies = [annual_frequency[str(year)] for year in years]
+    mean_year = sum(complete_years) / len(complete_years)
+    frequencies = [
+        annual_frequency[str(year)] for year in complete_years
+    ]
     mean_frequency = sum(frequencies) / len(frequencies)
 
     numerator = sum(
         (year - mean_year) * (frequency - mean_frequency)
-        for year, frequency in zip(years, frequencies)
+        for year, frequency in zip(complete_years, frequencies)
     )
     denominator = sum(
-        (year - mean_year) ** 2 for year in years
+        (year - mean_year) ** 2 for year in complete_years
     )
 
     slope = numerator / denominator
@@ -126,9 +138,9 @@ def calculate_annual_trend(annual_frequency: dict[str, int]) -> dict:
     return {
         "method": "ordinary_least_squares",
         "available": True,
-        "years_analyzed": len(years),
-        "start_year": years[0],
-        "end_year": years[-1],
+        "years_analyzed": len(complete_years),
+        "start_year": complete_years[0],
+        "end_year": complete_years[-1],
         "slope_events_per_year": round(slope, 4),
         "slope_events_per_decade": round(slope_per_decade, 2),
         "direction": direction,
@@ -248,7 +260,11 @@ def analyze_heatwaves(
         str(year): events_per_year.get(year, 0)
         for year in range(start_date.year, end_date.year + 1)
     }
-    trend = calculate_annual_trend(annual_frequency)
+    trend = calculate_annual_trend(
+        annual_frequency,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
     durations = [event["duration_days"] for event in events]
 
@@ -274,6 +290,15 @@ def analyze_heatwaves(
             "analysis_records_received": len(observations),
             "missing_analysis_dates": missing_dates,
             "missing_analysis_date_count": len(missing_dates),
+            "missing_temperature_dates": [
+                item["date"]
+                for item in observations
+                if item["temperature_max"] is None
+            ],
+            "missing_temperature_date_count": sum(
+                item["temperature_max"] is None
+                for item in observations
+            ),
         },
         "summary": {
             "total_events": len(events),
